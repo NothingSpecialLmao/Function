@@ -1,0 +1,151 @@
+local Loader = {}
+local FastAttack = {}
+
+local Players = game:GetService("Player")
+local LocalPlayer, ReplicatedStorage = Players.LocalPlayer, game:GetService("ReplicatedStorage")
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+
+local Modules = game.ReplicatedStorage:WaitForChild("Modules")
+local Net = Modules:WaitForChild("Net")
+local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
+
+
+local SendHitsToServer
+local RunHitDetection
+
+local combatUtil = require(game.ReplicatedStorage.Modules.CombatUtil)
+
+if hookfunction then
+	local hooks = {
+		[CombatUtil.GetComboPaddingTime] = 0,
+		[CombatUtil.GetAttackCancelMultiplier] = 0,
+		[CombatUtil.CanAttack] = true
+	}
+
+	for arg, rtnv in pairs(hooks) do
+	hookfunction(arg, function(...)
+		return rtnv 
+	end)
+end
+
+task.defer(function()
+	local ok1, combatEnv = pcall(getsenv, Modules.CombatUtil)
+	if ok1 and combatEnv then
+		SendHitsToServer = combatEnv._G.SendHitsToServer
+	end
+
+	local ok2, combatModule = pcall(require, Modules.CombatUtil)
+	if ok2 and combatModule then
+		RunHitDetection = combatModule.RunHitDetection
+	end
+end)
+
+function FastAttack:IsAlive(target)
+	return target and not target:FindFirstChild("VehicleSeat") and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 and target:FindFirstChild("HumanoidRootPart")
+end
+
+function FastAttack:GetDistance(from, to)
+	local fromPos = typeof(from) == "Vector3" and from or from.Position
+	local toPos = to and (typeof(to) == "Vector3" and to or to.Position) or LocalPlayer.Character.PrimaryPart.Position
+
+	return (fromPos - toPos).Magnitude
+end
+
+function FastAttack:GetNearbyEnemies(range)
+	local results = {}
+
+	for _, enemy in ipairs(workspace.Enemies:GetChildren()) do
+		if self:IsAlive(enemy)
+			and self:GetDistance(enemy.HumanoidRootPart, Character.PrimaryPart) <= range then
+			table.insert(results, enemy)
+		end
+	end
+
+	return results
+end
+
+function FastAttack:GetRandomHitbox(target)
+	local hitboxes = {
+		"RightLowerArm","RightUpperArm",
+		"LeftLowerArm","LeftUpperArm",
+		"RightHand","LeftHand",
+		"HumanoidRootPart","Head"
+	}
+	return target:FindFirstChild(hitboxes[math.random(#hitboxes)]) or target.HumanoidRootPart
+end
+
+function FastAttack:SuperFastAttack()
+	local targets = self:GetNearbyEnemies(60)
+	if #targets == 0 then return end
+
+	local attackArgs = {nil, {}}
+	local mainHitPart
+
+	for _, enemy in ipairs(targets) do
+		local hitPart = self:GetRandomHitbox(enemy)
+		if not mainHitPart then
+			mainHitPart = hitPart
+			attackArgs[1] = hitPart
+		end
+		table.insert(attackArgs[2], {enemy, hitPart})
+	end
+
+	if not attackArgs[1] then return end
+
+	RegisterAttack:FireServer(0)
+
+	if SendHitsToServer then
+		SendHitsToServer(unpack(attackArgs))
+	end
+end
+
+function FastAttack:RunHitboxFastAttack()
+	local tool = Character:FindFirstChildOfClass("Tool")
+	if not tool or not RunHitDetection then return end
+
+	local success, hitResults = pcall(function()
+		return RunHitDetection(Character, tool)
+	end)
+
+	if not success or type(hitResults) ~= "table" or #hitResults == 0 then
+		return
+	end
+
+	local attackArgs = {nil, {}}
+
+	for _, target in ipairs(hitResults) do
+		if self:IsAlive(target) then
+			local hitPart = self:GetRandomHitbox(target)
+			if not attackArgs[1] then
+				attackArgs[1] = hitPart
+			end
+			table.insert(attackArgs[2], {target, hitPart})
+		end
+	end
+
+	if #attackArgs[2] == 0 then return end
+
+	RegisterAttack:FireServer(0)
+
+	if SendHitsToServer then
+		SendHitsToServer(unpack(attackArgs))
+	end
+end
+
+function Loader:Enable(boolean)
+	game:GetService("RunService").Stepped:Connect(function()
+	    if boolean then
+	        for i = 1, 3 do
+	            task.spawn(function()
+	                FastAttack:SuperFastAttack()
+	            end)
+	            task.spawn(function()
+	                FastAttack:RunHitboxFastAttack()
+	            end)
+	        end
+	    end
+	end)
+end
+
+return Loader
